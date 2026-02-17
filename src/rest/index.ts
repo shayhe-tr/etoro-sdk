@@ -1,0 +1,10 @@
+export { RestClient } from './rest-client';
+export { MarketDataClient } from './market-data.client';
+export { TradingExecutionClient } from './trading-execution.client';
+export { TradingInfoClient } from './trading-info.client';
+export { FeedsClient } from './feeds.client';
+export { ReactionsClient } from './reactions.client';
+export { DiscoveryClient } from './discovery.client';
+export { PiDataClient } from './pi-data.client';
+export { WatchlistsClient } from './watchlists.client';
+export { UsersInfoClient } from './users-info.client';

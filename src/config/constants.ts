@@ -1,0 +1,14 @@
+export const DEFAULT_BASE_URL = 'https://public-api.etoro.com';
+export const DEFAULT_WS_URL = 'wss://ws.etoro.com/ws';
+export const API_VERSION = 'v1';
+export const API_PREFIX = `/api/${API_VERSION}`;
+export const MAX_RATE_INSTRUMENT_IDS = 100;
+export const MAX_CANDLES = 1000;
+export const DEFAULT_TIMEOUT = 30_000;
+export const DEFAULT_RETRY_ATTEMPTS = 3;
+export const DEFAULT_RETRY_DELAY = 1_000;
+export const DEFAULT_WS_RECONNECT_ATTEMPTS = 10;
+export const DEFAULT_WS_RECONNECT_DELAY = 1_000;
+export const DEFAULT_WS_AUTH_TIMEOUT = 10_000;
+export const DEFAULT_WS_HEARTBEAT_INTERVAL = 30_000;
+export const DEFAULT_WS_HEARTBEAT_TIMEOUT = 10_000;
