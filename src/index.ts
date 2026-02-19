@@ -1,6 +1,6 @@
 // High-level trading client
 export { EToroTrading, type TradingEvents, type OrderOptions } from './trading/trading-client';
-export { InstrumentResolver } from './trading/instrument-resolver';
+export { InstrumentResolver, type InstrumentInfo } from './trading/instrument-resolver';
 
 // Low-level clients
 export { RestClient } from './rest/rest-client';

@@ -34,11 +34,34 @@ export class MarketDataClient {
   }
 
   async getInstruments(params?: GetInstrumentsParams): Promise<InstrumentsResponse> {
+    // API quirk: comma-separated instrumentIds returns 500.
+    // Batch in parallel (same as rates endpoint).
+    const ids = params?.instrumentIds;
+    if (ids && ids.length > 1) {
+      const results = await Promise.all(
+        ids.map((id) =>
+          this.http.request<InstrumentsResponse>({
+            method: 'GET',
+            path: `${API_PREFIX}/market-data/instruments`,
+            query: {
+              instrumentIds: String(id),
+              exchangeIds: params?.exchangeIds?.join(','),
+              stocksIndustryIds: params?.stocksIndustryIds?.join(','),
+              instrumentTypeIds: params?.instrumentTypeIds?.join(','),
+            },
+          }),
+        ),
+      );
+      return {
+        instrumentDisplayDatas: results.flatMap((r) => r.instrumentDisplayDatas ?? []),
+      };
+    }
+
     return this.http.request({
       method: 'GET',
       path: `${API_PREFIX}/market-data/instruments`,
       query: {
-        instrumentIds: params?.instrumentIds?.join(','),
+        instrumentIds: ids?.[0] != null ? String(ids[0]) : undefined,
         exchangeIds: params?.exchangeIds?.join(','),
         stocksIndustryIds: params?.stocksIndustryIds?.join(','),
         instrumentTypeIds: params?.instrumentTypeIds?.join(','),

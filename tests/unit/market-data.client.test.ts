@@ -37,9 +37,9 @@ describe('MarketDataClient', () => {
   });
 
   describe('getInstruments', () => {
-    it('should join array params with commas', async () => {
+    it('should pass single ID directly', async () => {
       await client.getInstruments({
-        instrumentIds: [1, 2, 3],
+        instrumentIds: [1],
         exchangeIds: [10],
       });
 
@@ -47,7 +47,38 @@ describe('MarketDataClient', () => {
         method: 'GET',
         path: '/api/v1/market-data/instruments',
         query: {
-          instrumentIds: '1,2,3',
+          instrumentIds: '1',
+          exchangeIds: '10',
+          stocksIndustryIds: undefined,
+          instrumentTypeIds: undefined,
+        },
+      });
+    });
+
+    it('should batch multiple IDs in parallel (API quirk: multi-ID returns 500)', async () => {
+      mockHttp.request
+        .mockResolvedValueOnce({ instrumentDisplayDatas: [{ instrumentID: 1, symbolFull: 'A' }] })
+        .mockResolvedValueOnce({ instrumentDisplayDatas: [{ instrumentID: 2, symbolFull: 'B' }] })
+        .mockResolvedValueOnce({ instrumentDisplayDatas: [{ instrumentID: 3, symbolFull: 'C' }] });
+
+      const result = await client.getInstruments({
+        instrumentIds: [1, 2, 3],
+        exchangeIds: [10],
+      });
+
+      expect(mockHttp.request).toHaveBeenCalledTimes(3);
+      expect(result.instrumentDisplayDatas).toHaveLength(3);
+      expect(result.instrumentDisplayDatas.map((d: any) => d.instrumentID)).toEqual([1, 2, 3]);
+    });
+
+    it('should call without instrumentIds when none provided', async () => {
+      await client.getInstruments({ exchangeIds: [10] });
+
+      expect(mockHttp.request).toHaveBeenCalledWith({
+        method: 'GET',
+        path: '/api/v1/market-data/instruments',
+        query: {
+          instrumentIds: undefined,
           exchangeIds: '10',
           stocksIndustryIds: undefined,
           instrumentTypeIds: undefined,

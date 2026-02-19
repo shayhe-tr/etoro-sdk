@@ -804,4 +804,69 @@ describe('EToroTrading', () => {
       expect(etoro.resolver.preload).toHaveBeenCalledWith(['AAPL', 'BTC', 'TSLA']);
     });
   });
+
+  // --- Instrument Info / Display Name ---
+
+  describe('getDisplayName', () => {
+    it('should delegate to resolver.getDisplayName', async () => {
+      vi.spyOn(etoro.resolver, 'getDisplayName').mockResolvedValue('Apple');
+
+      const name = await etoro.getDisplayName('AAPL');
+      expect(name).toBe('Apple');
+      expect(etoro.resolver.getDisplayName).toHaveBeenCalledWith('AAPL');
+    });
+
+    it('should accept numeric instrument ID', async () => {
+      vi.spyOn(etoro.resolver, 'getDisplayName').mockResolvedValue('Bitcoin');
+
+      const name = await etoro.getDisplayName(100000);
+      expect(name).toBe('Bitcoin');
+    });
+  });
+
+  describe('getInstrumentInfo', () => {
+    it('should delegate to resolver.getInstrumentInfo', async () => {
+      const mockInfo = {
+        instrumentId: 1001,
+        displayName: 'Apple',
+        symbolFull: 'AAPL',
+        instrumentTypeID: 5,
+        exchangeID: 1,
+        priceSource: 'NASDAQ',
+        hasExpirationDate: false,
+        isInternalInstrument: false,
+      };
+      vi.spyOn(etoro.resolver, 'getInstrumentInfo').mockResolvedValue(mockInfo as any);
+
+      const info = await etoro.getInstrumentInfo('AAPL');
+      expect(info.displayName).toBe('Apple');
+    });
+  });
+
+  describe('getInstrumentInfoBatch', () => {
+    it('should resolve symbols and delegate to resolver.getInstrumentInfoBatch', async () => {
+      vi.spyOn(etoro.resolver, 'resolve').mockImplementation(async (s) => {
+        if (s === 'BTC' || s === 100000) return 100000;
+        if (s === 'AAPL' || s === 1001) return 1001;
+        return 0;
+      });
+      vi.spyOn(etoro.resolver, 'getInstrumentInfoBatch').mockResolvedValue([
+        { instrumentId: 100000, displayName: 'Bitcoin', symbolFull: 'BTC' } as any,
+        { instrumentId: 1001, displayName: 'Apple', symbolFull: 'AAPL' } as any,
+      ]);
+
+      const infos = await etoro.getInstrumentInfoBatch(['BTC', 'AAPL']);
+      expect(infos).toHaveLength(2);
+      expect(etoro.resolver.getInstrumentInfoBatch).toHaveBeenCalledWith([100000, 1001]);
+    });
+  });
+
+  describe('preloadInstrumentMetadata', () => {
+    it('should delegate to resolver.preloadMetadata', async () => {
+      vi.spyOn(etoro.resolver, 'preloadMetadata').mockResolvedValue();
+
+      await etoro.preloadInstrumentMetadata([1001, 100000]);
+      expect(etoro.resolver.preloadMetadata).toHaveBeenCalledWith([1001, 100000]);
+    });
+  });
 });

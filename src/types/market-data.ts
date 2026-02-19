@@ -59,11 +59,12 @@ export interface InstrumentDisplayData {
   instrumentTypeID: number;
   exchangeID: number;
   symbolFull: string;
-  stocksIndustryID: number;
+  instrumentTypeSubCategoryID?: number;
   priceSource: string;
   hasExpirationDate: boolean;
   isInternalInstrument: boolean;
   images: InstrumentImage[];
+  [key: string]: unknown;
 }
 
 export interface InstrumentsResponse {

@@ -19,7 +19,7 @@ import type {
   PendingOrder,
   TradeHistoryEntry,
 } from '../types/trading';
-import type { InstrumentRate, CandlesResponse } from '../types/market-data';
+import type { InstrumentRate, InstrumentDisplayData, CandlesResponse } from '../types/market-data';
 import type { TokenResponse } from '../types/common';
 import type { CandleInterval } from '../types/enums';
 import { CandleDirection } from '../types/enums';
@@ -462,5 +462,58 @@ export class EToroTrading extends TypedEventEmitter<TradingEvents> {
 
   async preloadInstruments(symbols: string[]): Promise<void> {
     return this.resolver.preload(symbols);
+  }
+
+  // --- Instrument Info / Display Name ---
+
+  /**
+   * Get the display name for an instrument (e.g. "Bitcoin", "Apple").
+   *
+   * @example
+   * await etoro.getDisplayName(100000);  // "Bitcoin"
+   * await etoro.getDisplayName('AAPL');  // "Apple"
+   */
+  async getDisplayName(symbolOrId: string | number): Promise<string> {
+    return this.resolver.getDisplayName(symbolOrId);
+  }
+
+  /**
+   * Get full instrument info including display name, symbol, type, exchange, image URL.
+   *
+   * @example
+   * const info = await etoro.getInstrumentInfo('BTC');
+   * console.log(`${info.displayName} (${info.symbolFull})`); // "Bitcoin (BTC)"
+   */
+  async getInstrumentInfo(symbolOrId: string | number) {
+    return this.resolver.getInstrumentInfo(symbolOrId);
+  }
+
+  /**
+   * Get instrument info for multiple instruments in parallel.
+   * Accepts instrument IDs or symbols (mixed).
+   *
+   * @example
+   * const infos = await etoro.getInstrumentInfoBatch(['BTC', 'AAPL', 'TSLA']);
+   * for (const info of infos) {
+   *   console.log(`${info.symbolFull}: ${info.displayName}`);
+   * }
+   */
+  async getInstrumentInfoBatch(symbolsOrIds: (string | number)[]) {
+    const ids = await Promise.all(symbolsOrIds.map((s) => this.resolver.resolve(s)));
+    return this.resolver.getInstrumentInfoBatch(ids);
+  }
+
+  /**
+   * Preload instrument metadata for a list of IDs (e.g. from portfolio positions).
+   * After preloading, display names are available synchronously via resolver.getCachedDisplayName().
+   *
+   * @example
+   * const portfolio = await etoro.getPortfolio();
+   * const ids = portfolio.clientPortfolio.positions.map(p => p.instrumentID);
+   * await etoro.preloadInstrumentMetadata(ids);
+   * // Now use: etoro.resolver.getCachedDisplayName(id)
+   */
+  async preloadInstrumentMetadata(instrumentIds: number[]): Promise<void> {
+    return this.resolver.preloadMetadata(instrumentIds);
   }
 }
