@@ -1,375 +1,267 @@
-# etoro-sdk
+# eToro SDK
 
-TypeScript SDK for the [eToro Public API](https://api-portal.etoro.com/) — market data, real-time WebSocket streaming, order execution, and portfolio management. Built for algo trading.
+![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)
+![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-## Features
+**eToro SDK** is a TypeScript client for the [eToro Public API](https://api-portal.etoro.com/) (REST v1 + WebSocket). It is the shared integration layer used by internal sibling apps (algo tools, portfolio services, terminals, etc.): typed requests, retries, rate limiting, streaming, and a high-level trading facade.
 
-- **Market Data** — search instruments, live rates, historical candles, exchanges, instrument types
-- **Real-time Streaming** — WebSocket price feeds with auto-reconnect and typed events
-- **Order Execution** — market orders (by amount or units), limit orders, close positions (full & partial)
-- **Order Monitoring** — real-time WebSocket-based order lifecycle tracking with REST polling fallback
-- **Portfolio** — positions, pending orders, mirrors (copy trading), P&L, trade history
-- **Bulk Operations** — close all positions, cancel all orders, cancel all limit orders
-- **Instrument Resolver** — automatic symbol-to-ID resolution with CSV bulk loading
-- **Rate Limiting** — built-in token-bucket rate limiter with 429 back-pressure handling
-- **Resilient Connections** — auto-retry with exponential backoff + jitter, WS heartbeat ping/pong
-- **Dual Mode** — demo and real account support via config
-- **Dual Build** — ESM + CommonJS with full TypeScript declarations
-- **Typed Everything** — complete TypeScript types for all API responses and WebSocket events
+## Installation
 
-## Quick Start
+This package is consumed as a **local file dependency** from repos next to it on disk:
 
-### Install
-
-```bash
-npm install etoro-sdk
+```json
+{
+  "dependencies": {
+    "etoro-sdk": "file:../etoro-sdk"
+  }
+}
 ```
 
-### Configure
+Then install from the consuming project root (adjust the relative path if your layout differs):
 
-Set your API keys as environment variables (or pass them to the constructor):
+```bash
+npm install
+```
+
+Build the SDK before consumers typecheck or bundle against it:
+
+```bash
+cd ../etoro-sdk && npm install && npm run build
+```
+
+Published artifact: **ESM** (`dist/esm/`) and **CJS** (`dist/cjs/`), with declarations (`package.json` `exports` → `.`).
+
+Optional: add `import 'dotenv/config'` in your app entrypoint so `ETORO_*` variables load from `.env` (the SDK reads `process.env` but does not call `dotenv` itself).
+
+## API coverage
+
+All paths are under `https://public-api.etoro.com/api/v1` unless overridden with `baseUrl`.
+
+| Area | REST resources (wrapped) | Notes |
+|------|---------------------------|--------|
+| **Market data** | `GET /market-data/search`, `.../instruments`, `.../instruments/rates`, `.../instruments/{id}/history/candles/...`, `.../instrument-types`, `.../instruments/closing-prices`, `.../instruments/industries`, `.../exchanges` | Rates: SDK batches multi-ID requests (API quirk). |
+| **Trading — execution** | `POST/DELETE .../trading/execution[/demo]/market-open-orders/...`, `.../limit-orders`, `.../market-close-orders/...` | `demo` vs `real` from `mode`. |
+| **Trading — info** | `GET .../trading/info[/demo|real]/portfolio`, `.../pnl`, `.../orders/{id}`; `GET .../trading/info/trade/history` | Portfolio/PnL/order paths switch with `mode`; trade history uses shared path. |
+| **Watchlists** | `GET/POST/PUT/DELETE /watchlists` and sub-routes (default, items, rank, public) | Full CRUD + public watchlists. |
+| **Feeds** | `POST /feeds/posts`, `GET /feeds/instruments/{id}`, `GET /feeds/users/{id}` | |
+| **Comments** | `POST /comments` | Via `ReactionsClient`. |
+| **Discovery** | `GET /watchlists/curated`, `GET /watchlists/recommendations` | Curated lists & recommendations. |
+| **PI data** | `GET /pi-data/copiers/{userId}` | |
+| **Users info** | `GET /users-info/search`, `GET /users-info/{id}/profile|portfolio|trade-info|performance|...` | |
+
+**WebSocket** (`wss://ws.etoro.com/ws` by default): authenticate with API credentials, subscribe to `instrument:{id}` for rates and `private` for order lifecycle events (see usage below).
+
+## Usage
+
+### Authentication and config
+
+REST calls send `x-api-key`, `x-user-key`, and `x-request-id`. Obtain keys from the [eToro API Portal](https://api-portal.etoro.com/).
 
 ```bash
 export ETORO_API_KEY="your-api-key"
 export ETORO_USER_KEY="your-user-key"
-export ETORO_MODE="demo"    # or "real"
+export ETORO_MODE="demo"   # or "real"
+# optional overrides:
+# ETORO_BASE_URL  (default https://public-api.etoro.com)
+# ETORO_WS_URL    (default wss://ws.etoro.com/ws)
 ```
-
-Or create a `.env` file:
-
-```env
-ETORO_API_KEY=your-api-key
-ETORO_USER_KEY=your-user-key
-ETORO_MODE=demo
-```
-
-### Get API Keys
-
-Sign up at the [eToro API Portal](https://api-portal.etoro.com/) to get your `apiKey` and `userKey`.
-
-## Usage
-
-### Market Data
 
 ```typescript
-import { EToroTrading, CandleInterval } from 'etoro-sdk';
+import { EToroTrading, createConfig } from 'etoro-sdk';
+
+// Typical: env-backed
+const etoro = new EToroTrading({ mode: 'demo' });
+
+// Or explicit (e.g. tests)
+const etoroReal = new EToroTrading({
+  apiKey: process.env.ETORO_API_KEY!,
+  userKey: process.env.ETORO_USER_KEY!,
+  mode: 'real',
+});
+
+// Low-level config object (e.g. custom RestClient / HttpClient)
+const config = createConfig({ mode: 'demo', logger: console });
+```
+
+### Instruments and market data
+
+```typescript
+import { EToroTrading, CandleInterval, CandleDirection } from 'etoro-sdk';
 
 const etoro = new EToroTrading();
 
-// Get live rates (fetches in parallel for multiple instruments)
-const rates = await etoro.getRates(['AAPL', 'TSLA', 'BTC']);
-for (const rate of rates) {
-  console.log(`${rate.instrumentID}: bid=${rate.bid} ask=${rate.ask}`);
-}
-
-// Historical candles
-const candles = await etoro.getCandles('AAPL', CandleInterval.OneDay, 30);
-
-// Search instruments
-const results = await etoro.rest.marketData.searchInstruments({
-  fields: 'instrumentId',
-  internalSymbolFull: 'AAPL',    // exact match
+// Search / metadata (REST)
+const search = await etoro.rest.marketData.searchInstruments({
+  internalSymbolFull: 'AAPL',
   pageSize: 5,
 });
 
-// Exchanges & instrument types
-const exchanges = await etoro.rest.marketData.getExchanges();
-const types = await etoro.rest.marketData.getInstrumentTypes();
+const meta = await etoro.rest.marketData.getInstruments({
+  instrumentIds: [100000],
+});
+
+// High-level: rates and candles (symbol → ID via InstrumentResolver)
+const rates = await etoro.getRates(['AAPL', 'BTC']);
+const candles = await etoro.getCandles('AAPL', CandleInterval.OneDay, 30, CandleDirection.Desc);
+
+// CSV bulk load (see `src/data/instruments.csv`)
+import { readFileSync } from 'node:fs';
+etoro.resolver.loadFromCsv(readFileSync('path/to/instruments.csv', 'utf8'));
 ```
 
-### WebSocket Streaming
+### Portfolio and trades
 
 ```typescript
-const etoro = new EToroTrading();
+const etoro = new EToroTrading({ mode: 'demo' });
 
-// Connect (authenticates automatically)
+const portfolio = await etoro.getPortfolio();
+const positions = await etoro.getPositions();
+const pending = await etoro.getPendingOrders();
+const pnl = await etoro.getPnl();
+const history = await etoro.getTradeHistory('2024-01-01', 1, 50);
+```
+
+### Orders and streaming
+
+```typescript
+import { EToroTrading } from 'etoro-sdk';
+
+const etoro = new EToroTrading({ mode: 'demo' });
+
 await etoro.connect();
 
-// Subscribe to live price feeds
-await etoro.streamPrices(['BTC', 'ETH', 'AAPL'], true);
-
-// Handle real-time price updates
+await etoro.streamPrices(['BTC', 'AAPL'], true);
 etoro.on('price', (symbol, instrumentId, rate) => {
-  console.log(`${symbol}: bid=${rate.Bid} ask=${rate.Ask}`);
+  console.log(symbol, rate.Bid, rate.Ask);
 });
 
-// Subscribe to private events (order fills, etc.)
 etoro.subscribeToPrivateEvents();
-etoro.on('order:update', (event) => {
-  console.log(`Order ${event.OrderID}: status=${event.StatusID}`);
-});
+etoro.on('order:update', (e) => console.log(e.OrderID, e.StatusID));
 
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  await etoro.disconnect();
-  process.exit(0);
-});
-```
-
-### Trading
-
-```typescript
-const etoro = new EToroTrading({ mode: 'real' });
-
-// Buy $100 of Bitcoin
-const order = await etoro.buyByAmount('BTC', 100);
-console.log(`Order ID: ${order.orderForOpen.orderID}`);
-
-// Buy with stop-loss and take-profit
-const order2 = await etoro.buyByAmount('AAPL', 500, {
-  stopLoss: 240.00,
-  takeProfit: 280.00,
-  leverage: 2,
-});
-
-// Sell (short)
-await etoro.sellByAmount('TSLA', 200);
-await etoro.sellByUnits('AAPL', 5);
-
-// Close a position (auto-resolves instrument ID)
-await etoro.closePosition(positionID);
-
-// Partial close — close specific units from a position
-await etoro.closePosition(positionID, 0.0005);
-
-// Close all positions
-await etoro.closeAllPositions();
-
-// Place limit order
-await etoro.placeLimitOrder('TSLA', true, 400.00, 200);
-
-// Cancel orders
-await etoro.cancelOrder(orderId);           // cancel a market open order
-await etoro.cancelLimitOrder(orderId);      // cancel a limit order
-await etoro.cancelAllOrders();              // cancel all market open orders
-await etoro.cancelAllLimitOrders();         // cancel all limit orders
-```
-
-### Order Monitoring
-
-Track order lifecycle in real-time via WebSocket, with automatic REST polling fallback:
-
-```typescript
-const etoro = new EToroTrading({ mode: 'real' });
-await etoro.connect(); // WebSocket required for real-time monitoring
-
-// Place an order
 const order = await etoro.buyByAmount('BTC', 50);
-const orderId = order.orderForOpen.orderID;
-
-// Wait for execution (WS-based, ~3s typical)
-const result = await etoro.waitForOrder(orderId, 15_000);
-console.log(`Executed! Position: ${result.PositionID}, Units: ${result.ExecutedUnits}`);
-
-// Status flow: Pending (1) → Filling (2) → Executed (3)
-// Rejects on: Failed (4) or Cancelled (5)
+const done = await etoro.waitForOrder(order.orderForOpen.orderID, 30_000);
 
 await etoro.disconnect();
 ```
 
-### Portfolio
+Low-level execution (same auth as `RestClient`):
 
 ```typescript
-const etoro = new EToroTrading();
-
-// Get full portfolio (positions, mirrors, pending orders, credit)
-const portfolio = await etoro.getPortfolio();
-console.log(`Credit: $${portfolio.clientPortfolio.credit}`);
-
-for (const pos of portfolio.clientPortfolio.positions) {
-  console.log(`#${pos.positionID}: ${pos.instrumentID} ${pos.isBuy ? 'LONG' : 'SHORT'} $${pos.amount}`);
-}
-
-// Direct position helpers
-const positions = await etoro.getPositions();
-const pendingOrders = await etoro.getPendingOrders(); // limit + market open orders
-
-// P&L
-const pnl = await etoro.getPnl();
-
-// Trade history
-const history = await etoro.getTradeHistory('2024-01-01');
-```
-
-### Instrument Resolution
-
-The SDK resolves symbols to eToro instrument IDs automatically. For best performance, load the instrument CSV:
-
-```typescript
-import { readFileSync } from 'fs';
-
-const etoro = new EToroTrading();
-
-// Option 1: Load from CSV (5,200+ instruments, instant lookup)
-const csv = readFileSync('instruments.csv', 'utf-8');
-etoro.resolver.loadFromCsv(csv);
-
-// Option 2: Register individual mappings
-etoro.resolver.register('BTC', 100000);
-etoro.resolver.register('ETH', 100001);
-
-// Option 3: Auto-resolve via API (slower, makes HTTP request)
-const id = await etoro.resolveInstrument('AAPL'); // => 1001
-```
-
-### Low-Level REST Clients
-
-Every API endpoint is also available via direct REST clients:
-
-```typescript
-const etoro = new EToroTrading();
-
-// Market data
-etoro.rest.marketData.searchInstruments(params);
-etoro.rest.marketData.getInstruments(params);
-etoro.rest.marketData.getRates([1001, 1111]);
-etoro.rest.marketData.getCandles(1001, 'desc', 'OneDay', 30);
-etoro.rest.marketData.getExchanges();
-etoro.rest.marketData.getInstrumentTypes();
-
-// Trading execution
-etoro.rest.execution.openMarketOrderByAmount(params);
-etoro.rest.execution.openMarketOrderByUnits(params);
-etoro.rest.execution.openLimitOrder(params);
-etoro.rest.execution.closePosition(positionId, params);
-etoro.rest.execution.cancelMarketOpenOrder(orderId);
-etoro.rest.execution.cancelLimitOrder(orderId);
-
-// Trading info
-etoro.rest.info.getPortfolio();
-etoro.rest.info.getPnl();
-etoro.rest.info.getOrder(orderId);
-etoro.rest.info.getTradeHistory(params);
-
-// Watchlists (16 endpoints)
-etoro.rest.watchlists.getWatchlists();
-etoro.rest.watchlists.createWatchlist(params);
-// ... full CRUD
-
-// Social / Discovery
-etoro.rest.feeds.getInstrumentFeed(instrumentId);
-etoro.rest.discovery.getCuratedLists();
-etoro.rest.discovery.getMarketRecommendations();
-etoro.rest.usersInfo.searchUsers(params);
-```
-
-## Configuration
-
-```typescript
-const etoro = new EToroTrading({
-  apiKey: 'your-api-key',         // or ETORO_API_KEY env var
-  userKey: 'your-user-key',       // or ETORO_USER_KEY env var
-  mode: 'demo',                   // 'demo' | 'real' (or ETORO_MODE)
-  baseUrl: 'https://...',         // custom base URL
-  wsUrl: 'wss://...',             // custom WebSocket URL
-  timeout: 30000,                 // HTTP request timeout (ms)
-  retryAttempts: 3,               // retry failed requests
-  retryDelay: 1000,               // initial retry delay (ms)
-  logger: console,                // custom logger (or noopLogger)
+await etoro.rest.execution.openMarketOrderByAmount({
+  InstrumentID: 100000,
+  IsBuy: true,
+  Leverage: 1,
+  Amount: 100,
 });
 ```
 
+### Low-level REST facade
+
+```typescript
+const etoro = new EToroTrading();
+
+// After build, prefer typed methods on:
+// etoro.rest.marketData | execution | info | watchlists | feeds | reactions | discovery | piData | usersInfo
+
+await etoro.rest.watchlists.getUserWatchlists();
+await etoro.rest.discovery.getCuratedLists();
+await etoro.rest.usersInfo.getUserProfile(12345);
+```
+
+`MarketDataClient.getCandles` argument order: `instrumentId`, `direction`, `interval`, `count` — use enums:
+
+```typescript
+import { CandleDirection, CandleInterval } from 'etoro-sdk';
+await etoro.rest.marketData.getCandles(1001, CandleDirection.Desc, CandleInterval.OneDay, 30);
+```
+
+## Type exports
+
+The package re-exports TypeScript types from `etoro-sdk` (see `src/types/`):
+
+| Module | Purpose |
+|--------|---------|
+| `common` | Pagination, `TokenResponse`, etc. |
+| `enums` | `CandleInterval`, `CandleDirection`, `OrderStatusId`, `OrderType`, `TradingMode`, … |
+| `market-data` | Search, instruments, rates, candles, exchanges, industries, … |
+| `trading` | Orders, positions, portfolio, PnL, trade history |
+| `websocket` | WS envelopes, instrument rates, private order events |
+| `feeds` | Posts, feeds, comments, user/social shapes |
+
+Config types: `EToroConfig`, `EToroConfigInput`, `EToroConfigWithLogger`. Errors: `EToroError`, `EToroApiError`, `EToroAuthError`, `EToroRateLimitError`, `EToroWebSocketError`, `EToroValidationError`.
+
+## Configuration reference
+
+| Input | Env var | Default |
+|-------|---------|---------|
+| API key | `ETORO_API_KEY` | — (required) |
+| User key | `ETORO_USER_KEY` | — (required) |
+| Mode | `ETORO_MODE` | `demo` |
+| REST base URL | `ETORO_BASE_URL` | `https://public-api.etoro.com` |
+| WebSocket URL | `ETORO_WS_URL` | `wss://ws.etoro.com/ws` |
+| HTTP timeout (ms) | — | `30000` |
+| Retry attempts | — | `3` |
+| Retry delay (ms) | — | `1000` |
+
+Optional `logger` on `EToroTrading` / `createConfig` matches the SDK `Logger` interface (`debug` / `info` / `warn` — use `consoleLogger` or `noopLogger` from the package).
+
 ## Architecture
 
-```
-EToroTrading (high-level)
-  |
-  +-- RestClient (facade)
-  |     +-- MarketDataClient       8 endpoints
-  |     +-- TradingExecutionClient 7 endpoints (demo/real routing)
-  |     +-- TradingInfoClient      4 endpoints (demo/real routing)
-  |     +-- WatchlistsClient      16 endpoints
-  |     +-- FeedsClient            3 endpoints
-  |     +-- ReactionsClient        1 endpoint
-  |     +-- DiscoveryClient        2 endpoints
-  |     +-- PiDataClient           1 endpoint
-  |     +-- UsersInfoClient        6 endpoints
-  |
-  +-- HttpClient (transport)
-  |     +-- Auth headers (x-api-key, x-user-key, x-request-id)
-  |     +-- Retry with exponential backoff + jitter
-  |     +-- Token-bucket rate limiter (429 back-pressure)
-  |
-  +-- WsClient (WebSocket)
-  |     +-- Auto-auth, auto-reconnect
-  |     +-- Heartbeat ping/pong (dead connection detection)
-  |     +-- Typed event emission
-  |     +-- Subscription tracking
-  |
-  +-- InstrumentResolver
-        +-- CSV bulk loading (5,200+ instruments)
-        +-- API fallback search
-        +-- Symbol <-> ID cache
-```
+- **`EToroTrading`**: Facade over `RestClient`, `WsClient`, and `InstrumentResolver`; convenience methods for rates, candles, portfolio, orders, and WS subscriptions.
+- **`RestClient`**: Composes domain clients (`MarketDataClient`, `TradingExecutionClient`, `TradingInfoClient`, watchlists, feeds, discovery, PI data, users, reactions).
+- **`HttpClient`**: `fetch`, auth headers, timeouts, retries with jitter, optional token-bucket rate limiter, maps 401/403/429/5xx to typed errors.
+- **`WsClient`**: `ws` package, auth, subscribe/unsubscribe tracking, heartbeat, reconnect, parsed events.
+- **`InstrumentResolver`**: Symbol cache, CSV load, REST search fallback.
 
-## Examples
-
-| Example | Description | Run |
-|---------|-------------|-----|
-| `examples/basic-usage.ts` | Rates, candles, portfolio, buy/close | `npx tsx examples/basic-usage.ts` |
-| `examples/stream-prices.ts` | WebSocket price streaming | `npx tsx examples/stream-prices.ts` |
-| `examples/algo-bot-skeleton.ts` | SMA crossover trading bot | `npx tsx examples/algo-bot-skeleton.ts` |
-| `examples/live-chart.ts` | Real-time terminal price chart | `npx tsx examples/live-chart.ts` |
-
-## API Quirks
-
-These are undocumented behaviors discovered through live testing:
-
-| Quirk | Details |
-|-------|---------|
-| Rates: single ID only | Comma-separated `instrumentIds` returns 500. SDK auto-batches in parallel. |
-| Search: limited fields | `fields` param is ignored; only `instrumentId` is returned. Use `internalSymbolFull` for exact symbol match. |
-| BTC instrument ID | BTC = `100000` (tradeable crypto). ID `315` (BTC.Fut) is internal-only. |
-| Capital ID suffixes | All entity IDs use PascalCase: `positionID`, `instrumentID`, `orderID`, `CID`. |
-| Close requires InstrumentId | The close position body must include `InstrumentId`. SDK handles this automatically. |
-| Order status values | 1=Pending, 2=Filling, 3=Executed, 4=Failed, 5=Cancelled |
-| WS order events | Filling (2) delivered instantly via WS; Executed (3) confirmed via REST fallback. `waitForOrder()` handles both. |
-| Endpoint paths differ | Exchanges: `/market-data/exchanges` (not `/instruments/exchanges`). Types: `/market-data/instrument-types`. |
-| MIT orders | Market-if-touched orders use the same `/limit-orders` endpoint as limit orders. |
-
-## Project Structure
+## Project structure
 
 ```
 src/
-  config/          Config schema (zod), constants, env var loading
-  data/            instruments.csv (5,200+ instrument mappings)
-  errors/          Typed error classes (API, Auth, RateLimit, WS, Validation)
-  http/            HTTP client with retry, rate limiter, auth headers, error mapping
-  rest/            REST endpoint clients (9 sub-clients, 42+ endpoints)
-  trading/         High-level trading client + instrument resolver
-  types/           Full TypeScript types for all API shapes
-  utils/           Event emitter, logger, UUID, sleep
-  ws/              WebSocket client with heartbeat, message parser, subscription tracker
+  config/       Zod schema, createConfig, constants (API prefix v1, limits)
+  data/         instruments.csv (optional bulk symbol map)
+  errors/       Typed errors
+  http/         HttpClient, retry, rate limiter
+  rest/         One client class per API area
+  trading/      EToroTrading, InstrumentResolver
+  types/        Request/response and WS types
+  utils/        Logger, UUID, event emitter, sleep
+  ws/           WsClient, parser, subscription tracker
 tests/
-  unit/            130 unit tests (vitest) across 12 test files
-  integration/     Live API integration tests (real account verified)
-examples/          4 runnable examples
+  unit/         Vitest
+  integration/  Live API scripts (use dotenv + real keys)
+examples/       Runnable demos (basic usage, streaming, charts, bot skeleton)
 ```
 
-## Development
+## Scripts
 
 ```bash
-# Install dependencies
 npm install
-
-# Run tests
 npm test
-
-# Type check
 npm run typecheck
-
-# Build (ESM + CJS)
-npm run build
-
-# Run an example
-npx tsx examples/live-chart.ts
+npm run build    # tsup → dist/esm + dist/cjs
 ```
 
 ## Requirements
 
-- Node.js >= 18.0.0
-- eToro API key and user key from [api-portal.etoro.com](https://api-portal.etoro.com/)
+- Node.js **>= 18**
+- Valid eToro **API key** and **user key**
+
+## API quirks (live API)
+
+| Topic | Behavior |
+|-------|----------|
+| Rates query | Comma-separated `instrumentIds` can 500; SDK requests one ID per call and merges. |
+| Search `fields` | Prefer `internalSymbolFull` for exact symbol match; returned fields can be limited vs docs. |
+| Close position | Body must include `InstrumentId`; `EToroTrading.closePosition` resolves it from portfolio. |
+| Order `StatusID` | 1 Pending, 2 Filling, 3 Executed, 4 Failed, 5 Cancelled. |
+| `waitForOrder` | Uses private WS events; starts REST poll fallback after ~3s if no terminal state. |
+| Path names | e.g. exchanges under `/market-data/exchanges`, types under `/market-data/instrument-types`. |
 
 ## License
 
 MIT
+
+## Reference
+
+- [eToro API Portal](https://api-portal.etoro.com/)
